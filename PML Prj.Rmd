@@ -1,0 +1,93 @@
+PML Project
+========================================================
+
+The data has been sourced from : http://groupware.les.inf.puc-rio.br/har.
+The model developed in this document could accurately predict all 20 test cases.
+
+## Preprocessing
+- Remove all derived variables as they will only add noise.
+- Remove all new_window=yes rows - only 400 odd - since there is no explaination of the readings and the statitstics (min - max etc) are wrong for the few windows that I tried
+- Remove windows with less than 10 readings - 504 rows.
+- Split sets into training and testing.
+
+Having clean data, we split it into 75% training and 25% testing data frames. This way, we keep aside some data for later cross validation and estimating out of sample errors.
+
+
+```{r echo = FALSE, message=FALSE}
+library(caret)
+require(lattice); require(ggplot2)
+tr1<-read.csv("pml-training.csv", stringsAsFactors=FALSE)
+t1<-order(unique(tr1$num_window))
+smallWins<-table(tr1$num_window)
+t2<-ifelse(smallWins[as.character(tr1$num_window)] < 10, 0 , 1)
+ImpCols<-c("X","num_window","pitch_arm","yaw_arm","yaw_dumbbell", "roll_belt", "roll_arm", "roll_dumbbell", "total_accel_arm", "total_accel_belt", "total_accel_forearm", "total_accel_dumbbell","classe")
+tr2 <- tr1[((t2==1) & (tr1$new_window=="no")),ImpCols]
+
+inTrain<-createDataPartition(y=tr2$num_window, p=0.75, list=FALSE);
+training<-tr2[inTrain,]; 
+testing<-tr2[-inTrain,]
+
+```
+##Exploration
+Exploratory plots of smaller subsests such as
+- plot(sub1$roll_belt~sub1$num+window, col=as.numeric(sub1$classe)+3)
+were drawn (over 50). (Not included due to length limitation.)
+
+They showed that the RANGE (not value of each reading) of "pitch_arm","yaw_arm","yaw_dumbbell", "roll_belt", "roll_arm", "roll_dumbbell", "total_accel_arm", "total_accel_belt", "total_accel_forearm", "total_accel_dumbbell" can predict the class.
+- Since we are checking hip throw(class E), elbow throw(class B), partial lifts(class C) and partial lowerings(class D), this made semse. So we will only take max and min readings from a window. And fit a randomForest.
+
+```{r echo = FALSE, message=FALSE}
+library(randomForest)
+training1<-aggregate(training, list(window=training$num_window), max)
+training2<-aggregate(training, list(window=training$num_window), min)
+training1<-cbind(training1[,c(1,14,4:13)], training2[,4:13])
+colnames(training1)<-c("window","classe","maxPA","maxYA","maxYD", "maxRB", "maxRA", "maxRD", "maxAA", "maxAB", "maxAF", "maxAD","minPA","minYA","minYD", "minRB", "minRA", "minRD", "minAA", "minAB", "minAF", "minAD")
+training1$classe <- as.factor(training1$classe)
+
+mf<-train(classe~., data=training1, method="rf")
+
+test1<-aggregate(testing, list(window=testing$num_window), max)
+test2<-aggregate(testing, list(window=testing$num_window), min)
+test1<-cbind(test1[,c(1,14,4:13)], test2[,4:13])
+colnames(test1)<-c("window","classe","maxPA","maxYA","maxYD", "maxRB", "maxRA", "maxRD", "maxAA", "maxAB", "maxAF", "maxAD","minPA","minYA","minYD", "minRB", "minRA", "minRD", "minAA", "minAB", "minAF", "minAD")
+test1$classe <- as.factor(test1$classe)
+pred<-predict(mf, newdata=test1)
+table(test1$classe, pred)
+```
+However, this gives a out of sample testset fit of - 
+
+  About 10% error.
+  So we need to improve identification of C and D - which are halfway lift and halfway lower mistakes.
+  
+  So we will try another way to find significant predictors. This time, we use the importance of predictors. And plot the same.
+  
+``` {r echo = FALSE, message=FALSE}
+allCols<-colnames(tr1)
+allCols<-subset(allCols, !grepl( "min|max|var|avg|stddev|kurtosis|timestamp|X|user_name|new_window|skewness|amplitude",allCols))
+tr3 <- tr1[((t2==1) & (tr1$new_window=="no")),allCols]
+tr3$classe<-as.factor(tr3$classe)
+rf.fit<-randomForest(tr3[2:53],tr3$classe,ntree=100,importance=TRUE)
+ varImpPlot(rf.fit)
+```
+Thus we obtain best random forest predictors in decreasing order of importance and pick only the first 10 of them to actually model.
+``` {r echo = FALSE, message=FALSE}
+inTrain<-createDataPartition(y=tr3$num_window, p=0.75, list=FALSE);
+training<-tr3[inTrain,]; 
+testing<-tr3[-inTrain,]
+mf1<-randomForest(training[,c(2,3,4,40,39,53,45,47,42,34)] , training$classe, data=training, nTree=100, method="rf")
+pred1<-predict(mf1, newdata=testing)
+table(testing$classe, pred1)
+```
+
+The out of sample accuracy on test set now is -
+
+ 
+We used this model on the test set supplied. The out of sample errors were 0.
+``` {r echo = FALSE}
+#  ts1<-read.csv("pml-testing.csv", stringsAsFactors=FALSE)
+#  testCols<-allCols[1:53]
+#  ts2 <- ts1[(ts1$new_window=="no"),testCols]
+#  pred2<-predict(mf1, newdata=ts2)
+#  pred2
+```
+
